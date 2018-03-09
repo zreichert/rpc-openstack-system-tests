@@ -4,19 +4,46 @@
 
 ## Shell Opts ----------------------------------------------------------------
 
-set -ev
+set -x
 set -o pipefail
 export ANSIBLE_HOST_KEY_CHECKING=False
 
 ## Variables -----------------------------------------------------------------
 
+# RC is a sentinel value to capture failed exit codes of portions of the script
+RC=0
 SYS_VENV_NAME="${SYS_VENV_NAME:-venv-molecule}"
 SYS_CONSTRAINTS="constraints.txt"
 SYS_REQUIREMENTS="requirements.txt"
 SYS_INVENTORY="${SYS_INVENTORY:-/opt/openstack-ansible/playbooks/inventory}"
 
+## Functions -----------------------------------------------------------------
+# Update the RC return code value unless it has previously been set to a
+# non-zero value.
+update_return_code() {
+    if [ "$RC" -eq "0" ]; then
+        RC=$1
+    fi
+}
+
+# Return the RC return code value unless it has not previously been set.
+# If that is the case, pass through the exit code of the last call.
+my_exit() {
+    if [ "$RC" -eq "0" ]; then
+        exit $1
+    else
+        exit $RC
+    fi
+}
+
 ## Main ----------------------------------------------------------------------
 
+# Trap script termination to return a captured RC value without prematurely
+# terminating the script.
+trap 'my_exit $?' INT TERM EXIT
+
+# fail hard during setup
+set -e
 # Create virtualenv for molecule
 virtualenv --no-pip --no-setuptools --no-wheel "${SYS_VENV_NAME}"
 
@@ -55,8 +82,10 @@ set +e # allow test stages to return errors
 for TEST in molecules/* ; do
     ./moleculerize.py --output "$TEST/molecule/default/molecule.yml" dynamic_inventory.json
     pushd "$TEST"
+    echo "TESTING: $(git remote -v | awk '/fetch/{print $2}') at SHA $(git rev-parse HEAD)"
     molecule converge
     molecule verify
+    update_return_code $?
     popd
 done
 
